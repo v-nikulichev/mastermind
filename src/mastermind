@@ -19,15 +19,9 @@ import msgpack
 
 from opster import Dispatcher
 from cocaine.exceptions import ServiceError
-from cocaine.services import Service
 
-from mastermind import MastermindClient
+from mastermind import MastermindClient, ReconnectableService
 from mastermind.query.couples import Couple
-
-try:
-    from cocaine.exceptions import DisconnectionError
-except ImportError:
-    from cocaine.asio.exceptions import DisconnectionError
 
 
 SERVICE_BASE_APP_NAME = 'mastermind2.26'
@@ -66,50 +60,15 @@ def logger_setup():
 logger = logger_setup()
 
 
-class ReconnectableService(object):
-    def __init__(self, app_name, attempts=3, host=None, port=None):
-        self.app_name = app_name
-        self.host = host
-        self.port = port
-        self.attempts = attempts
-        self.connect_service()
-
-    def connect_service(self):
-        self.backend = Service(self.app_name, host=self.host, port=self.port)
-
-    def enqueue(self, method, data):
-        return ReconnectableChain(self, method, data, self.attempts)
-
-
-class ReconnectableChain(object):
-    def __init__(self, service, method, data, attempts):
-        self.service = service
-        self.method = method
-        self.data = data
-        self.attempts = attempts
-        self._create_chain()
-
-    def _create_chain(self):
-        self.chain = self.service.backend.enqueue(self.method, self.data)
-
-    def get(self, attempts=None):
-        try:
-            return self.chain.get()
-        except DisconnectionError:
-            attempts = attempts or self.attempts
-            if attempts <= 1:
-                raise RuntimeError('Failed to perform request "{}" ({} attempts)'.format(
-                    self.method, self.attempts))
-            sleep(3)
-            self.service.connect_service()
-            self._create_chain()
-            return self.get(attempts=attempts - 1)
-
-
 def service(host, app):
     parts = host.split(':', 1)
     hostname, port = parts[0], len(parts) == 2 and int(parts[1]) or SERVICE_DEFAULT_PORT
-    return ReconnectableService(app or SERVICE_APP_NAME, host=hostname, port=port)
+    return ReconnectableService(
+        app or SERVICE_APP_NAME,
+        addresses='{}:{}'.format(hostname, port),
+        delay=5,
+        attempts=6,
+    )
 
 
 def client(address, app):
@@ -256,12 +215,12 @@ def group_detach_node(group, node=None,
     s = service(host, app)
 
     if not node:
-        res = s.enqueue('get_group_info', msgpack.packb(group)).get()
+        res = s.run_sync('get_group_info', msgpack.packb(group))
         pprint(res)
         print 'You have to select node to be detached (<host>:<port>/<backend_id>)'
         return
 
-    res = s.enqueue('group_detach_node', msgpack.packb([group, node])).get()
+    res = s.run_sync('group_detach_node', msgpack.packb([group, node]))
     print res
 
 
@@ -271,7 +230,7 @@ def group_force_update(host=None, app=None):
     '''Force mastermind node data collection'''
     s = service(host, app)
 
-    res = s.enqueue('force_nodes_update', msgpack.packb(None)).get()
+    res = s.run_sync('force_nodes_update', msgpack.packb(None))
     print res
 
 
@@ -298,8 +257,8 @@ def group_move(group,
     else:
         uncoupled_groups = None
 
-    job_data = s.enqueue('move_group', msgpack.packb([
-        group, {'uncoupled_groups': uncoupled_groups}, force])).get()
+    job_data = s.run_sync('move_group', msgpack.packb([
+        group, {'uncoupled_groups': uncoupled_groups}, force]))
 
     print job_data
 
@@ -328,8 +287,8 @@ def group_restore(group, uncoupled_group=('u', False, 'Use uncoupled group as '
     else:
         src_group = None
 
-    job_data = s.enqueue('restore_group', msgpack.packb([
-        group, uncoupled_group, {'src_group': src_group}, force])).get()
+    job_data = s.run_sync('restore_group', msgpack.packb([
+        group, uncoupled_group, {'src_group': src_group}, force]))
 
     print job_data
 
@@ -344,10 +303,10 @@ def group_recover_dc(group,
 
     group = int(group)
 
-    couple_data = retry(s, 'get_couple_info', group)
+    couple_data = s.run_sync('get_couple_info', group)
 
-    job_data = s.enqueue('create_job', msgpack.packb([
-        'recover_dc_job', {'couple': couple_data['id']}])).get()
+    job_data = s.run_sync('create_job', msgpack.packb([
+        'recover_dc_job', {'couple': couple_data['id']}]))
 
     print job_data
 
@@ -369,10 +328,10 @@ def group_search_by_path(group_host, group_path,
 
     group_path = os.path.normpath(group_path) + '/'
 
-    res = s.enqueue('search_history_by_path', msgpack.packb([
+    res = s.run_sync('search_history_by_path', msgpack.packb([
         {'host': hostname,
          'path': group_path,
-         'last': last}])).get()
+         'last': last}]))
 
     if isinstance(res, dict):
         # error
@@ -404,7 +363,7 @@ def couple_info(group, host=None, app=None):
     s = service(host, app)
     group = int(group)
 
-    res = s.enqueue("get_couple_info", msgpack.packb(group)).get()
+    res = s.run_sync("get_couple_info", msgpack.packb(group))
     for group in res.get('groups', []):
         for node in group.get('node_backends', []):
             convert_stats(node)
@@ -745,10 +704,10 @@ def couple_add_groupset(couple,
     elif dc:
         params['mandatory_dcs'] = dc
 
-    res = s.enqueue(
+    res = s.run_sync(
         'add_groupset_to_couple',
         msgpack.packb(params)
-    ).get()
+    )
 
     if 'Error' in res:
         if json:
@@ -772,7 +731,7 @@ def couple_break(couple, confirm=None,
     s = service(host, app)
     groups = [int(g) for g in couple.split(':')]
 
-    res = s.enqueue('break_couple', msgpack.packb((groups, confirm))).get()
+    res = s.run_sync('break_couple', msgpack.packb((groups, confirm)))
     print res
 
 
@@ -788,7 +747,7 @@ def couple_get_weights(
     params = []
     if namespace:
         params.append(namespace)
-    res = s.enqueue("get_group_weights", msgpack.packb(params)).get()
+    res = s.run_sync("get_group_weights", msgpack.packb(params))
     print res
 
 
@@ -804,7 +763,7 @@ def couple_repair(group,
     if namespace:
         params.append(namespace)
 
-    res = s.enqueue("repair_groups", msgpack.packb(tuple(params))).get()
+    res = s.run_sync("repair_groups", msgpack.packb(tuple(params)))
     print res
 
 
@@ -819,7 +778,7 @@ def job_status(job_id,
                host=None, app=None):
     '''Get job status'''
     s = service(host, app)
-    res = s.enqueue('get_job_status', msgpack.packb([job_id])).get()
+    res = s.run_sync('get_job_status', msgpack.packb([job_id]))
     if json:
         print dumps(res)
     else:
@@ -835,7 +794,7 @@ def job_move_groups(src_host,
        Applicable only for single node backend groups'''
     s = service(host, app)
 
-    res = s.enqueue('move_groups_from_host', msgpack.packb([src_host])).get()
+    res = s.run_sync('move_groups_from_host', msgpack.packb([src_host]))
 
     if 'jobs' not in res:
         print res
@@ -873,7 +832,7 @@ def host_restore_groups_from_path(src_host, path,
         'autoapprove': autoapprove,
     }
 
-    job_data = s.enqueue('restore_groups_from_path', msgpack.packb(params)).get()
+    job_data = s.run_sync('restore_groups_from_path', msgpack.packb(params))
     print job_data
 
 
@@ -1192,7 +1151,7 @@ def couple_freeze(couple, host=None, app=None):
     '''Freeze symmetric group (frozen couples are excluded from balancing)'''
     s = service(host, app)
 
-    res = s.enqueue('freeze_couple', msgpack.packb(couple)).get()
+    res = s.run_sync('freeze_couple', msgpack.packb(couple))
     print res
 
 
@@ -1202,7 +1161,7 @@ def couple_unfreeze(couple, host=None, app=None):
     '''Unfreeze symmetric group'''
     s = service(host, app)
 
-    res = s.enqueue('unfreeze_couple', msgpack.packb(couple)).get()
+    res = s.run_sync('unfreeze_couple', msgpack.packb(couple))
     print res
 
 
@@ -1213,7 +1172,7 @@ def couple_defrag(couple,
     '''Create job to perform couple's groups defragmentation'''
     s = service(host, app)
 
-    couple_data = retry(s, 'get_couple_info', couple.split(':')[0])
+    couple_data = s.run_sync('get_couple_info', couple.split(':')[0])
     if 'Error' in couple_data:
         print warn('Couple {0} is not found {1}'.format(couple, couple_data['Error']))
         return
@@ -1223,8 +1182,8 @@ def couple_defrag(couple,
             couple, couple_data['couple_status'], ['FULL', 'OK']))
         return
 
-    job_data = s.enqueue('create_job', msgpack.packb([
-        'couple_defrag_job', {'couple': couple_data['id']}])).get()
+    job_data = s.run_sync('create_job', msgpack.packb([
+        'couple_defrag_job', {'couple': couple_data['id']}]))
 
     print job_data
 
@@ -1247,7 +1206,7 @@ def lock_host(lock_host,
         print warn('Failed to resolve hostname {0}: {1}'.format(lock_host, e))
         return
 
-    result = s.enqueue('host_acquire_lock', msgpack.packb([hostname])).get()
+    result = s.run_sync('host_acquire_lock', msgpack.packb([hostname]))
 
     if 'Error' in result:
         print result['Error']
@@ -1274,7 +1233,7 @@ def unlock_host(lock_host,
         print warn('Failed to resolve hostname {0}: {1}'.format(lock_host, e))
         return
 
-    result = s.enqueue('host_release_lock', msgpack.packb([hostname])).get()
+    result = s.run_sync('host_release_lock', msgpack.packb([hostname]))
 
     if 'Error' in result:
         print result['Error']
@@ -1293,7 +1252,7 @@ def cache_clean(host=None, app=None):
     '''Release lock on a host'''
     s = service(host, app)
 
-    result = s.enqueue('cache_clean', msgpack.packb(None)).get()
+    result = s.run_sync('cache_clean', msgpack.packb(None))
 
     if isinstance(result, dict) and 'Error' in result:
         print result['Error']
@@ -1308,7 +1267,7 @@ def cache_keys(host=None, app=None):
     '''Fetch cached keys'''
     s = service(host, app)
 
-    res = s.enqueue('get_cached_keys', msgpack.packb(None)).get()
+    res = s.run_sync('get_cached_keys', msgpack.packb(None))
     print res
 
 
@@ -1319,7 +1278,7 @@ def cache_keys_by_group(group, host=None, app=None):
     s = service(host, app)
     group = int(group)
 
-    res = s.enqueue('get_cached_keys_by_group', msgpack.packb(group)).get()
+    res = s.run_sync('get_cached_keys_by_group', msgpack.packb(group))
     print res
 
 
@@ -1407,7 +1366,7 @@ def watch_progress(session, task_id):
 
     while True:
         try:
-            status = session.enqueue('get_command', msgpack.packb([task_id])).get()
+            status = session.run_sync('get_command', msgpack.packb([task_id]))
         except ServiceError:
             sleep(1)
             continue
@@ -1442,23 +1401,6 @@ def watch_progress(session, task_id):
         sleep(1)
 
     return success
-
-
-def retry(session, method, *params, **kwargs):
-    retries = kwargs.get('retries', 2)
-
-    tries = 0
-    while True:
-        try:
-            return session.enqueue(method, msgpack.packb(*params)).get()
-        except ServiceError:
-            tries += 1
-            if tries > retries:
-                print 'Failed to perform mastermind request: {0}, params {1}'.format(method, params)
-                raise
-
-            sleep(3)
-            continue
 
 
 def print_group(group):
@@ -1550,10 +1492,10 @@ def lrc_group_prepare_new_groups(
         'mandatory_dcs': dc,
     }
 
-    res = s.enqueue(
+    res = s.run_sync(
         'build_lrc_groups',
         msgpack.packb(params)
-    ).get()
+    )
 
     if 'Error' in res:
         if json:
@@ -1742,7 +1684,7 @@ def lrc_groupset_attach(group_or_groupset,
     else:
         groupset = group_or_groupset
 
-    res = s.enqueue(
+    res = s.run_sync(
         'attach_groupset_to_couple',
         msgpack.packb({
             'couple': couple,
@@ -1753,7 +1695,7 @@ def lrc_groupset_attach(group_or_groupset,
                 'part_size': int(part_size),
             },
         })
-    ).get()
+    )
 
     if 'Error' in res:
         print warn(res['Error'])
@@ -1862,10 +1804,10 @@ def lrc_groupset_convert(groupset=('g',
     elif dc:
         params['mandatory_dcs'] = dc
 
-    res = s.enqueue(
+    res = s.run_sync(
         'convert_external_storage_to_groupset',
         msgpack.packb(params)
-    ).get()
+    )
 
     if 'Error' in res:
         print warn(res['Error'])
@@ -1904,7 +1846,10 @@ def ttl_cleanup(iter_group,
         'dry_run': dry_run
         }
 
-    res = s.enqueue('ttl_cleanup', msgpack.packb(params)).get()
+    res = s.run_sync(
+        'ttl_cleanup',
+        msgpack.packb(params)
+    )
 
     print res
     return
