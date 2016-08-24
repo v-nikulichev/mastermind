@@ -303,7 +303,9 @@ def group_recover_dc(group,
 
     group = int(group)
 
-    couple_data = s.run_sync('get_couple_info', group)
+    couple_data = s.run_sync('get_couple_info', msgpack.packb(group))
+
+    print couple_data
 
     job_data = s.run_sync('create_job', msgpack.packb([
         'recover_dc_job', {'couple': couple_data['id']}]))
@@ -1172,7 +1174,7 @@ def couple_defrag(couple,
     '''Create job to perform couple's groups defragmentation'''
     s = service(host, app)
 
-    couple_data = s.run_sync('get_couple_info', couple.split(':')[0])
+    couple_data = s.run_sync('get_couple_info', msgpack.packb(couple.split(':')[0]))
     if 'Error' in couple_data:
         print warn('Couple {0} is not found {1}'.format(couple, couple_data['Error']))
         return
