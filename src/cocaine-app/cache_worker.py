@@ -25,8 +25,12 @@ import infrastructure
 import infrastructure_cache
 import jobs
 import couple_records
-import node_info_updater
 import helpers as h
+
+if config.get('stat_source', 'native') == 'collector':
+    from collector_updater import NodeInfoUpdater
+else:
+    from node_info_updater import NodeInfoUpdater
 
 logger = logging.getLogger()
 
@@ -116,7 +120,7 @@ def init_infrastructure_cache_manager(W, n):
 
 
 def init_node_info_updater(n):
-    return node_info_updater.NodeInfoUpdater(n, None)
+    return NodeInfoUpdater(n, None)
 
 
 def init_infrastructure(W, n):

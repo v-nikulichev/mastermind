@@ -31,10 +31,14 @@ import infrastructure
 import jobs
 import couple_records
 import minions
-import node_info_updater
 from planner import Planner
 from config import config
 from manual_locks import manual_locker
+
+if config.get('stat_source', 'native') == 'collector':
+    from collector_updater import NodeInfoUpdater
+else:
+    from node_info_updater import NodeInfoUpdater
 
 logger = logging.getLogger()
 i = iter(xrange(100))
@@ -163,7 +167,7 @@ def init_infrastructure(jf, ghf):
 
 def init_node_info_updater(jf, crf, statistics):
     logger.info("trace node info updater %d" % (i.next()))
-    niu = node_info_updater.NodeInfoUpdater(
+    niu = NodeInfoUpdater(
         node=n,
         job_finder=jf,
         couple_record_finder=crf,
