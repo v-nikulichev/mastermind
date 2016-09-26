@@ -1680,7 +1680,7 @@ class Group(object):
                                 'some node statuses are BROKEN'.format(self))
             return self.status
 
-        if self.type == self.TYPE_DATA:
+        if self.type == self.TYPE_DATA or self.type == self.TYPE_LRC_8_2_2_V1:
             # perform checks for common data group
             status = self.update_storage_group_status()
             if status:
@@ -1742,7 +1742,12 @@ class Group(object):
                                 'no namespace has been assigned to it'.format(self))
             return self.status
 
-        if self.group_id not in self.meta['couple']:
+        if self.type == TYPE_DATA:
+            siblings = self.meta['couple']
+        else:
+            siblings = self.meta['lrc']['groups']
+
+        if self.group_id not in siblings:
             self.status = Status.BROKEN
             self.status_text = ('Group {0} is in BROKEN state because '
                                 'its group id is missing from coupling info'.format(self))
@@ -2692,6 +2697,19 @@ class Lrc822v1Groupset(Groupset):
         c = GroupsetInfo(str(self))
         c._set_raw_data(self.info_data())
         return c
+
+    def check_groups(self, groups):
+        for group in self.groups:
+            if group.meta is None or 'lrc' not in group.meta or 'groups' not in group.meta['lrc'] or not group.meta['lrc']['groups']:
+                return False
+
+            if set(groups) != set(group.meta['lrc']['groups']):
+                return False
+
+        if set(groups) != set((g.group_id for g in self.groups)):
+            return False
+
+        return True
 
     @property
     def groupset_settings(self):
